@@ -12,7 +12,6 @@ See: https://github.com/signal11/hidapi
 package hidapi
 
 /*
-//#cgo pkg-config: libusb-1.0
 #cgo pkg-config: hidapi-libusb
 #include <hidapi/hidapi.h>
 #include <stdlib.h>
@@ -22,6 +21,7 @@ import "C"
 
 import (
 	"fmt"
+	"strings"
 	"unsafe"
 
 	wchar "github.com/vitaminwater/cgo.wchar"
@@ -93,6 +93,20 @@ type DeviceInfo struct {
 	InterfaceNumber    int    // USB interface
 }
 
+func (di *DeviceInfo) String() string {
+	s := []string{}
+	s = append(s, fmt.Sprintf("path %s", di.Path))
+	s = append(s, fmt.Sprintf("vid:pid %04x:%04x", di.Vid, di.Pid))
+	s = append(s, fmt.Sprintf("serial number %s", di.SerialNumber))
+	s = append(s, fmt.Sprintf("release number %04x", di.ReleaseNumber))
+	s = append(s, fmt.Sprintf("manufacturer string %s", di.ManufacturerString))
+	s = append(s, fmt.Sprintf("product string %s", di.ProductString))
+	s = append(s, fmt.Sprintf("usage page %04x", di.UsagePage))
+	s = append(s, fmt.Sprintf("usage %04x", di.Usage))
+	s = append(s, fmt.Sprintf("interface number %d", di.InterfaceNumber))
+	return strings.Join(s, "\n")
+}
+
 const wsLength = 128
 
 //-----------------------------------------------------------------------------
@@ -159,85 +173,63 @@ func Exit() error {
 	return nil
 }
 
-/** @brief Enumerate the HID Devices.
-
-	This function returns a linked list of all the HID devices
-	attached to the system which match vendor_id and product_id.
-	If @p vendor_id is set to 0 then any vendor matches.
-	If @p product_id is set to 0 then any product matches.
-	If @p vendor_id and @p product_id are both set to 0, then
-	all HID devices will be returned.
-
-	@ingroup API
-	@param vendor_id The Vendor ID (VID) of the types of device
-		to open.
-	@param product_id The Product ID (PID) of the types of
-		device to open.
-
-    @returns
-    	This function returns a pointer to a linked list of type
-    	struct #hid_device, containing information about the HID devices
-    	attached to the system, or NULL in the case of failure. Free
-    	this linked list by calling hid_free_enumeration().
-*/
-
+// Enumerate returns a list of HID Device Information.
 func Enumerate(vid, pid uint16) []*DeviceInfo {
-	//struct hid_device_info HID_API_EXPORT * HID_API_CALL hid_enumerate(unsigned short vendor_id, unsigned short product_id);
-	return nil
+	diList := C.hid_enumerate(C.uint16_t(vid), C.uint16_t(pid))
+	if diList == nil {
+		return nil
+	}
+	devs := []*DeviceInfo{}
+	di := diList
+	for di != nil {
+		sString, _ := wchar.WcharStringPtrToGoString(unsafe.Pointer(di.serial_number))
+		mString, _ := wchar.WcharStringPtrToGoString(unsafe.Pointer(di.manufacturer_string))
+		pString, _ := wchar.WcharStringPtrToGoString(unsafe.Pointer(di.product_string))
+		dev := &DeviceInfo{
+			Path:               C.GoString(di.path),
+			Vid:                uint16(di.vendor_id),
+			Pid:                uint16(di.product_id),
+			SerialNumber:       sString,
+			ReleaseNumber:      uint16(di.release_number),
+			ManufacturerString: mString,
+			ProductString:      pString,
+			UsagePage:          uint16(di.usage_page),
+			Usage:              uint16(di.usage),
+			InterfaceNumber:    int(di.interface_number),
+		}
+		devs = append(devs, dev)
+		di = di.next
+	}
+	C.hid_free_enumeration(diList)
+	return devs
 }
 
-/** @brief Free an enumeration Linked List
-
-    This function frees a linked list created by hid_enumerate().
-
-	@ingroup API
-    @param devs Pointer to a list of struct_device returned from
-    	      hid_enumerate().
-*/
-
-func FreeEnumeration(devs []*DeviceInfo) {
-	//void  HID_API_EXPORT HID_API_CALL hid_free_enumeration(struct hid_device_info *devs);
-}
-
-/** @brief Open a HID device using a Vendor ID (VID), Product ID
-(PID) and optionally a serial number.
-
-If @p serial_number is NULL, the first device with the
-specified VID and PID is opened.
-
-@ingroup API
-@param vendor_id The Vendor ID (VID) of the device to open.
-@param product_id The Product ID (PID) of the device to open.
-@param serial_number The Serial Number of the device to open
-	               (Optionally NULL).
-
-@returns
-	This function returns a pointer to a #hid_device object on
-	success or NULL on failure.
-*/
-
+// Open a HID device using a vendor ID (VID), product ID (PID) and optionally a serial number.
 func Open(vid, pid uint16, sn string) *Device {
-	//HID_API_EXPORT hid_device * HID_API_CALL hid_open(unsigned short vendor_id, unsigned short product_id, const wchar_t *serial_number);
-	return nil
+	ws, err := wchar.FromGoString(sn)
+	if err != nil {
+		return nil
+	}
+	dev := C.hid_open(C.uint16_t(vid), C.uint16_t(pid), (*C.wchar_t)(ws.Pointer()))
+	if dev == nil {
+		return nil
+	}
+	return &Device{
+		dev: dev,
+	}
 }
 
-/** @brief Open a HID device by its path name.
-
-	The path name be determined by calling hid_enumerate(), or a
-	platform-specific path name can be used (eg: /dev/hidraw0 on
-	Linux).
-
-	@ingroup API
-    @param path The path name of the device to open
-
-	@returns
-		This function returns a pointer to a #hid_device object on
-		success or NULL on failure.
-*/
-
+// OpenPath opens a HID device by its path name.
 func OpenPath(path string) *Device {
-	//HID_API_EXPORT hid_device * HID_API_CALL hid_open_path(const char *path);
-	return nil
+	cPath := C.CString(path)
+	defer C.free(unsafe.Pointer(cPath))
+	dev := C.hid_open_path(cPath)
+	if dev == nil {
+		return nil
+	}
+	return &Device{
+		dev: dev,
+	}
 }
 
 // Write an output report to a HID device.
