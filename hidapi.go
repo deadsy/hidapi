@@ -15,7 +15,8 @@ package hidapi
 //#cgo pkg-config: libusb-1.0
 #cgo pkg-config: hidapi-libusb
 #include <hidapi/hidapi.h>
-//#include <stdlib.h>
+#include <stdlib.h>
+#include <stdint.h>
 */
 import "C"
 
@@ -28,6 +29,42 @@ import (
 
 //-----------------------------------------------------------------------------
 // utility functions
+
+// go2cBuffer creates a C uint8_t buffer from a Go []byte buffer.
+// Call freeBuffer on the returned C buffer.
+func go2cBuffer(buf []byte) *C.uint8_t {
+	return (*C.uint8_t)(unsafe.Pointer(C.CString(string(buf))))
+}
+
+// c2goCopy copies a C uint8_t buffer into a Go []byte slice.
+func c2goCopy(s []byte, buf *C.uint8_t) []byte {
+	x := (*[1 << 30]byte)(unsafe.Pointer(buf))
+	copy(s, x[:])
+	return s
+}
+
+// c2goSlice creates a Go []byte slice and copies in a C uint8_t buffer.
+func c2goSlice(buf *C.uint8_t, n int) []byte {
+	s := make([]byte, n)
+	return c2goCopy(s, buf)
+}
+
+// allocBuffer allocates a C uint8_t buffer of length n bytes.
+// Call freeBuffer on the returned C buffer.
+func allocBuffer(n int) *C.uint8_t {
+	return (*C.uint8_t)(C.malloc(C.size_t(n)))
+}
+
+// freeBuffer frees a C uint8_t buffer.
+func freeBuffer(buf *C.uint8_t) {
+	C.free(unsafe.Pointer(buf))
+}
+
+// Set a value within a C uint8_t buffer.
+func (buf *C.uint8_t) Set(idx int, val byte) {
+	x := (*[1 << 30]byte)(unsafe.Pointer(buf))
+	x[idx] = val
+}
 
 // boolToInt converts a boolean to an int.
 func boolToInt(x bool) int {
@@ -203,85 +240,45 @@ func OpenPath(path string) *Device {
 	return nil
 }
 
-/** @brief Write an Output report to a HID device.
-
-The first byte of @p data[] must contain the Report ID. For
-devices which only support a single report, this must be set
-to 0x0. The remaining bytes contain the report data. Since
-the Report ID is mandatory, calls to hid_write() will always
-contain one more byte than the report contains. For example,
-if a hid report is 16 bytes long, 17 bytes must be passed to
-hid_write(), the Report ID (or 0x0, for devices with a
-single report), followed by the report data (16 bytes). In
-this example, the length passed in would be 17.
-
-hid_write() will send the data on the first OUT endpoint, if
-one exists. If it does not, it will send the data through
-the Control Endpoint (Endpoint 0).
-
-@ingroup API
-@param device A device handle returned from hid_open().
-@param data The data to send, including the report number as
-	the first byte.
-@param length The length in bytes of the data to send.
-
-@returns
-	This function returns the actual number of bytes written and
-	-1 on error.
-*/
-
-func (d *Device) Write(data []byte, length uint) (int, error) {
-	//int  HID_API_EXPORT HID_API_CALL hid_write(hid_device *device, const unsigned char *data, size_t length);
-	return 0, nil
+// Write an output report to a HID device.
+func (d *Device) Write(data []byte) (int, error) {
+	cBuffer := go2cBuffer(data)
+	defer freeBuffer(cBuffer)
+	rc := int(C.hid_write(d.dev, cBuffer, C.ulong(len(data))))
+	if rc < 0 {
+		return 0, d.devError("hid_write", rc)
+	}
+	return rc, nil
 }
 
-/** @brief Read an Input report from a HID device with timeout.
-
-Input reports are returned
-to the host through the INTERRUPT IN endpoint. The first byte will
-contain the Report number if the device uses numbered reports.
-
-@ingroup API
-@param device A device handle returned from hid_open().
-@param data A buffer to put the read data into.
-@param length The number of bytes to read. For devices with
-	multiple reports, make sure to read an extra byte for
-	the report number.
-@param milliseconds timeout in milliseconds or -1 for blocking wait.
-
-@returns
-	This function returns the actual number of bytes read and
-	-1 on error. If no packet was available to be read within
-	the timeout period, this function returns 0.
-*/
-
-func (d *Device) ReadTimeout(length uint, ms int) ([]byte, error) {
-	//int HID_API_EXPORT HID_API_CALL hid_read_timeout(hid_device *dev, unsigned char *data, size_t length, int milliseconds);
-	return nil, nil
+// ReadTimeout reads an input report from a HID device with timeout.
+func (d *Device) ReadTimeout(id byte, length, milliseconds int) ([]byte, error) {
+	cBuffer := allocBuffer(length)
+	defer freeBuffer(cBuffer)
+	cBuffer.Set(0, id)
+	rc := int(C.hid_read_timeout(d.dev, cBuffer, C.ulong(length), C.int(milliseconds)))
+	if rc < 0 {
+		return nil, d.devError("hid_read_timeout", rc)
+	}
+	if rc == 0 {
+		return nil, nil
+	}
+	return c2goSlice(cBuffer, rc), nil
 }
 
-/** @brief Read an Input report from a HID device.
-
-	Input reports are returned
-    to the host through the INTERRUPT IN endpoint. The first byte will
-	contain the Report number if the device uses numbered reports.
-
-	@ingroup API
-	@param device A device handle returned from hid_open().
-	@param data A buffer to put the read data into.
-	@param length The number of bytes to read. For devices with
-		multiple reports, make sure to read an extra byte for
-		the report number.
-
-	@returns
-		This function returns the actual number of bytes read and
-		-1 on error. If no packet was available to be read and
-		the handle is in non-blocking mode, this function returns 0.
-*/
-
-func (d *Device) Read(length uint) ([]byte, error) {
-	//int  HID_API_EXPORT HID_API_CALL hid_read(hid_device *device, unsigned char *data, size_t length);
-	return nil, nil
+// Read an input report from a HID device.
+func (d *Device) Read(id byte, length int) ([]byte, error) {
+	cBuffer := allocBuffer(length)
+	defer freeBuffer(cBuffer)
+	cBuffer.Set(0, id)
+	rc := int(C.hid_read(d.dev, cBuffer, C.ulong(length)))
+	if rc < 0 {
+		return nil, d.devError("hid_read", rc)
+	}
+	if rc == 0 {
+		return nil, nil
+	}
+	return c2goSlice(cBuffer, rc), nil
 }
 
 // SetNonBlocking sets the device handle to be non-blocking.
@@ -293,65 +290,30 @@ func (d *Device) SetNonBlocking(nonblock bool) error {
 	return nil
 }
 
-/** @brief Send a Feature report to the device.
-
-Feature reports are sent over the Control endpoint as a
-Set_Report transfer.  The first byte of @p data[] must
-contain the Report ID. For devices which only support a
-single report, this must be set to 0x0. The remaining bytes
-contain the report data. Since the Report ID is mandatory,
-calls to hid_send_feature_report() will always contain one
-more byte than the report contains. For example, if a hid
-report is 16 bytes long, 17 bytes must be passed to
-hid_send_feature_report(): the Report ID (or 0x0, for
-devices which do not use numbered reports), followed by the
-report data (16 bytes). In this example, the length passed
-in would be 17.
-
-@ingroup API
-@param device A device handle returned from hid_open().
-@param data The data to send, including the report number as
-	the first byte.
-@param length The length in bytes of the data to send, including
-	the report number.
-
-@returns
-	This function returns the actual number of bytes written and
-	-1 on error.
-*/
-
+// SendFeatureReport sends a feature report to the device.
 func (d *Device) SendFeatureReport(data []byte) (int, error) {
-	//int HID_API_EXPORT HID_API_CALL hid_send_feature_report(hid_device *device, const unsigned char *data, size_t length);
-	return 0, nil
+	cBuffer := go2cBuffer(data)
+	defer freeBuffer(cBuffer)
+	rc := int(C.hid_send_feature_report(d.dev, cBuffer, C.ulong(len(data))))
+	if rc < 0 {
+		return 0, d.devError("hid_send_feature_report", rc)
+	}
+	return rc, nil
 }
 
-/** @brief Get a feature report from a HID device.
-
-Set the first byte of @p data[] to the Report ID of the
-report to be read.  Make sure to allow space for this
-extra byte in @p data[]. Upon return, the first byte will
-still contain the Report ID, and the report data will
-start in data[1].
-
-@ingroup API
-@param device A device handle returned from hid_open().
-@param data A buffer to put the read data into, including
-	the Report ID. Set the first byte of @p data[] to the
-	Report ID of the report to be read, or set it to zero
-	if your device does not use numbered reports.
-@param length The number of bytes to read, including an
-	extra byte for the report ID. The buffer can be longer
-	than the actual report.
-
-@returns
-	This function returns the number of bytes read plus
-	one for the report ID (which is still in the first
-	byte), or -1 on error.
-*/
-
-func (d *Device) GetFeatureReport(length uint) ([]byte, error) {
-	//int HID_API_EXPORT HID_API_CALL hid_get_feature_report(hid_device *device, unsigned char *data, size_t length);
-	return nil, nil
+// GetFeatureReport gets a feature report from a HID device.
+func (d *Device) GetFeatureReport(id byte, length int) ([]byte, error) {
+	cBuffer := allocBuffer(length + 1)
+	defer freeBuffer(cBuffer)
+	cBuffer.Set(0, id)
+	rc := int(C.hid_get_feature_report(d.dev, cBuffer, C.ulong(length+1)))
+	if rc < 0 {
+		return nil, d.devError("hid_get_feature_report", rc)
+	}
+	if rc == 0 {
+		return nil, nil
+	}
+	return c2goSlice(cBuffer, rc), nil
 }
 
 // Close closes a HID device.
