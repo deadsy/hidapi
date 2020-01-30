@@ -18,36 +18,88 @@ package hidapi
 //#include <stdlib.h>
 */
 import "C"
-import "fmt"
+
+import (
+	"fmt"
+	"unsafe"
+
+	wchar "github.com/vitaminwater/cgo.wchar"
+)
 
 //-----------------------------------------------------------------------------
-// Errors
+// utility functions
 
-// Error stores error information.
-type Error struct {
-	Name string // function name
-	Code int    // C return code
-}
-
-// apiError returns an C-API error.
-func apiError(name string, rc int) *Error {
-	return &Error{
-		Name: name,
-		Code: rc,
+// boolToInt converts a boolean to an int.
+func boolToInt(x bool) int {
+	if x {
+		return 1
 	}
-}
-
-func (e *Error) Error() string {
-	return fmt.Sprintf("%s failed (%d)", e.Name, e.Code)
+	return 0
 }
 
 //-----------------------------------------------------------------------------
 
 type Device struct {
-	dev *C.struct_hid_device
+	dev *C.struct_hid_device_
 }
 
 type DeviceInfo struct {
+	Path               string // Platform-specific device path
+	Vid                uint16 // Vendor ID
+	Pid                uint16 // Product ID
+	SerialNumber       string // Serial Number
+	ReleaseNumber      uint16 // Device Release Number in BCD
+	ManufacturerString string // Manufacturer String
+	ProductString      string // Product String
+	UsagePage          uint16 // Usage Page for this Device/Interface (Windows/Mac only)
+	Usage              uint16 // Usage for this Device/Interface (Windows/Mac only)
+	InterfaceNumber    int    // USB interface
+}
+
+const wsLength = 128
+
+//-----------------------------------------------------------------------------
+// Errors
+
+// Error stores C-API error information.
+type Error struct {
+	FunctionName string // function name
+	ErrorString  string // device error string
+	ReturnCode   int    // return code
+}
+
+func (e *Error) Error() string {
+	if e.ErrorString != "" {
+		return fmt.Sprintf("%s failed %s (%d)", e.FunctionName, e.ErrorString, e.ReturnCode)
+	}
+	return fmt.Sprintf("%s failed (%d)", e.FunctionName, e.ReturnCode)
+}
+
+// apiError returns a C-API error.
+func apiError(name string, rc int) *Error {
+	return &Error{
+		FunctionName: name,
+		ReturnCode:   rc,
+	}
+}
+
+// devError returns a C-API error from a device call.
+func (d *Device) devError(name string, rc int) error {
+	s, err := d.ErrorString()
+	if err != nil {
+		s = "?"
+	}
+	return &Error{
+		FunctionName: name,
+		ErrorString:  s,
+		ReturnCode:   rc,
+	}
+}
+
+// ErrorString returns a string describing the last error which occurred.
+func (d *Device) ErrorString() (string, error) {
+	ws := wchar.FromWcharStringPtr(unsafe.Pointer(C.hid_error(d.dev)))
+	return ws.GoString()
 }
 
 //-----------------------------------------------------------------------------
@@ -232,27 +284,12 @@ func (d *Device) Read(length uint) ([]byte, error) {
 	return nil, nil
 }
 
-/** @brief Set the device handle to be non-blocking.
-
-In non-blocking mode calls to hid_read() will return
-immediately with a value of 0 if there is no data to be
-read. In blocking mode, hid_read() will wait (block) until
-there is data to read before returning.
-
-Nonblocking can be turned on and off at any time.
-
-@ingroup API
-@param device A device handle returned from hid_open().
-@param nonblock enable or not the nonblocking reads
- - 1 to enable nonblocking
- - 0 to disable nonblocking.
-
-@returns
-	This function returns 0 on success and -1 on error.
-*/
-
+// SetNonBlocking sets the device handle to be non-blocking.
 func (d *Device) SetNonBlocking(nonblock bool) error {
-	//int  HID_API_EXPORT HID_API_CALL hid_set_nonblocking(hid_device *device, int nonblock);
+	rc := int(C.hid_set_nonblocking(d.dev, C.int(boolToInt(nonblock))))
+	if rc != 0 {
+		return d.devError("hid_set_nonblocking", rc)
+	}
 	return nil
 }
 
@@ -317,94 +354,49 @@ func (d *Device) GetFeatureReport(length uint) ([]byte, error) {
 	return nil, nil
 }
 
-/** @brief Close a HID device.
-
-@ingroup API
-@param device A device handle returned from hid_open().
-*/
-
+// Close closes a HID device.
 func (d *Device) Close() {
-	//void HID_API_EXPORT HID_API_CALL hid_close(hid_device *device);
+	C.hid_close(d.dev)
 }
 
-/** @brief Get The Manufacturer String from a HID device.
-
-@ingroup API
-@param device A device handle returned from hid_open().
-@param string A wide string buffer to put the data into.
-@param maxlen The length of the buffer in multiples of wchar_t.
-
-@returns
-	This function returns 0 on success and -1 on error.
-*/
-
+// GetManufacturerString returns the manufacturer string from a HID device.
 func (d *Device) GetManufacturerString() (string, error) {
-	//int HID_API_EXPORT_CALL hid_get_manufacturer_string(hid_device *device, wchar_t *string, size_t maxlen);
-	return "", nil
+	ws := wchar.NewWcharString(wsLength)
+	rc := int(C.hid_get_manufacturer_string(d.dev, (*C.wchar_t)(ws.Pointer()), wsLength))
+	if rc != 0 {
+		return "", d.devError("hid_get_manufacturer_string", rc)
+	}
+	return ws.GoString()
 }
 
-/** @brief Get The Product String from a HID device.
-
-@ingroup API
-@param device A device handle returned from hid_open().
-@param string A wide string buffer to put the data into.
-@param maxlen The length of the buffer in multiples of wchar_t.
-
-@returns
-	This function returns 0 on success and -1 on error.
-*/
-
+// GetProductString returns the product string from a HID device.
 func (d *Device) GetProductString() (string, error) {
-	//int HID_API_EXPORT_CALL hid_get_product_string(hid_device *device, wchar_t *string, size_t maxlen);
-	return "", nil
+	ws := wchar.NewWcharString(wsLength)
+	rc := int(C.hid_get_product_string(d.dev, (*C.wchar_t)(ws.Pointer()), wsLength))
+	if rc != 0 {
+		return "", d.devError("hid_get_product_string", rc)
+	}
+	return ws.GoString()
 }
 
-/** @brief Get The Serial Number String from a HID device.
-
-@ingroup API
-@param device A device handle returned from hid_open().
-@param string A wide string buffer to put the data into.
-@param maxlen The length of the buffer in multiples of wchar_t.
-
-@returns
-	This function returns 0 on success and -1 on error.
-*/
-
+// GetSerialNumberString returns the serial number string from a HID device.
 func (d *Device) GetSerialNumberString() (string, error) {
-	//int HID_API_EXPORT_CALL hid_get_serial_number_string(hid_device *device, wchar_t *string, size_t maxlen);
-	return "", nil
+	ws := wchar.NewWcharString(wsLength)
+	rc := int(C.hid_get_serial_number_string(d.dev, (*C.wchar_t)(ws.Pointer()), wsLength))
+	if rc != 0 {
+		return "", d.devError("hid_get_serial_number_string", rc)
+	}
+	return ws.GoString()
 }
 
-/** @brief Get a string from a HID device, based on its string index.
-
-@ingroup API
-@param device A device handle returned from hid_open().
-@param string_index The index of the string to get.
-@param string A wide string buffer to put the data into.
-@param maxlen The length of the buffer in multiples of wchar_t.
-
-@returns
-	This function returns 0 on success and -1 on error.
-*/
-
+// GetIndexedString gets a string from a HID device, based on its string index.
 func (d *Device) GetIndexedString(idx int) (string, error) {
-	//int HID_API_EXPORT_CALL hid_get_indexed_string(hid_device *device, int string_index, wchar_t *string, size_t maxlen);
-	return "", nil
-}
-
-/** @brief Get a string describing the last error which occurred.
-
-@ingroup API
-@param device A device handle returned from hid_open().
-
-@returns
-	This function returns a string containing the last error
-	which occurred or NULL if none has occurred.
-*/
-
-func (d *Device) Error() string {
-	//    HID_API_EXPORT const wchar_t* HID_API_CALL hid_error(hid_device *device);
-	return ""
+	ws := wchar.NewWcharString(wsLength)
+	rc := int(C.hid_get_indexed_string(d.dev, C.int(idx), (*C.wchar_t)(ws.Pointer()), wsLength))
+	if rc != 0 {
+		return "", d.devError("hid_get_indexed_string", rc)
+	}
+	return ws.GoString()
 }
 
 //-----------------------------------------------------------------------------
