@@ -205,22 +205,32 @@ func Enumerate(vid, pid uint16) []*DeviceInfo {
 	devs := []*DeviceInfo{}
 	di := diList
 	for di != nil {
-		sString, _ := wchar.WcharStringPtrToGoString(unsafe.Pointer(di.serial_number))
-		mString, _ := wchar.WcharStringPtrToGoString(unsafe.Pointer(di.manufacturer_string))
-		pString, _ := wchar.WcharStringPtrToGoString(unsafe.Pointer(di.product_string))
-		dev := &DeviceInfo{
+
+		devInfo := &DeviceInfo{
 			Path:            C.GoString(di.path),
 			VendorID:        uint16(di.vendor_id),
 			ProductID:       uint16(di.product_id),
-			SerialNumber:    sString,
 			ReleaseNumber:   uint16(di.release_number),
-			Manufacturer:    mString,
-			Product:         pString,
 			UsagePage:       uint16(di.usage_page),
 			Usage:           uint16(di.usage),
 			InterfaceNumber: int(di.interface_number),
 		}
-		devs = append(devs, dev)
+
+		var err error
+
+		devInfo.SerialNumber, err = wchar.WcharStringPtrToGoString(unsafe.Pointer(di.serial_number))
+		if err != nil {
+			devInfo.SerialNumber = ""
+		}
+		devInfo.Manufacturer, err = wchar.WcharStringPtrToGoString(unsafe.Pointer(di.manufacturer_string))
+		if err != nil {
+			devInfo.Manufacturer = ""
+		}
+		devInfo.Product, err = wchar.WcharStringPtrToGoString(unsafe.Pointer(di.product_string))
+		if err != nil {
+			devInfo.Product = ""
+		}
+		devs = append(devs, devInfo)
 		di = di.next
 	}
 	C.hid_free_enumeration(diList)
@@ -339,8 +349,9 @@ func (d *Device) GetFeatureReport(id byte, length int) ([]byte, error) {
 }
 
 // Close closes a HID device.
-func (d *Device) Close() {
+func (d *Device) Close() error {
 	C.hid_close(d.dev)
+	return nil
 }
 
 // GetManufacturerString returns the manufacturer string from a HID device.
