@@ -13,6 +13,7 @@ package hidapi
 
 /*
 #cgo pkg-config: hidapi-libusb
+//#cgo pkg-config: hidapi-hidraw
 #include <hidapi/hidapi.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -20,6 +21,7 @@ package hidapi
 import "C"
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"unsafe"
@@ -76,34 +78,55 @@ func boolToInt(x bool) int {
 
 //-----------------------------------------------------------------------------
 
+// Device is a HID device.
 type Device struct {
 	dev *C.struct_hid_device_
 }
 
+func (d *Device) String() string {
+	s := []string{}
+	x, err := d.GetManufacturerString()
+	if err == nil {
+		s = append(s, fmt.Sprintf("manufacturer: %s", x))
+	}
+	x, err = d.GetProductString()
+	if err == nil {
+		s = append(s, fmt.Sprintf("product: %s", x))
+	}
+	x, err = d.GetSerialNumberString()
+	if err == nil {
+		s = append(s, fmt.Sprintf("serial number: %s", x))
+	}
+	return strings.Join(s, "\n")
+}
+
+//-----------------------------------------------------------------------------
+
+// DeviceInfo stores information about the HID device.
 type DeviceInfo struct {
-	Path               string // Platform-specific device path
-	Vid                uint16 // Vendor ID
-	Pid                uint16 // Product ID
-	SerialNumber       string // Serial Number
-	ReleaseNumber      uint16 // Device Release Number in BCD
-	ManufacturerString string // Manufacturer String
-	ProductString      string // Product String
-	UsagePage          uint16 // Usage Page for this Device/Interface (Windows/Mac only)
-	Usage              uint16 // Usage for this Device/Interface (Windows/Mac only)
-	InterfaceNumber    int    // USB interface
+	Path            string // Platform-specific device path
+	VendorID        uint16 // Vendor ID
+	ProductID       uint16 // Product ID
+	SerialNumber    string // Serial Number
+	ReleaseNumber   uint16 // Device Release Number in BCD
+	Manufacturer    string // Manufacturer String
+	Product         string // Product String
+	UsagePage       uint16 // Usage Page for this Device/Interface (Windows/Mac only)
+	Usage           uint16 // Usage for this Device/Interface (Windows/Mac only)
+	InterfaceNumber int    // USB interface
 }
 
 func (di *DeviceInfo) String() string {
 	s := []string{}
-	s = append(s, fmt.Sprintf("path %s", di.Path))
-	s = append(s, fmt.Sprintf("vid:pid %04x:%04x", di.Vid, di.Pid))
-	s = append(s, fmt.Sprintf("serial number %s", di.SerialNumber))
-	s = append(s, fmt.Sprintf("release number %04x", di.ReleaseNumber))
-	s = append(s, fmt.Sprintf("manufacturer string %s", di.ManufacturerString))
-	s = append(s, fmt.Sprintf("product string %s", di.ProductString))
-	s = append(s, fmt.Sprintf("usage page %04x", di.UsagePage))
-	s = append(s, fmt.Sprintf("usage %04x", di.Usage))
-	s = append(s, fmt.Sprintf("interface number %d", di.InterfaceNumber))
+	s = append(s, fmt.Sprintf("path: %s", di.Path))
+	s = append(s, fmt.Sprintf("vid.pid: %04x:%04x", di.VendorID, di.ProductID))
+	s = append(s, fmt.Sprintf("serial number: %s", di.SerialNumber))
+	s = append(s, fmt.Sprintf("release number: %d.%d", (di.ReleaseNumber>>4)&0xf, di.ReleaseNumber&0xf))
+	s = append(s, fmt.Sprintf("manufacturer: %s", di.Manufacturer))
+	s = append(s, fmt.Sprintf("product: %s", di.Product))
+	//s = append(s, fmt.Sprintf("usage page: %04x", di.UsagePage))
+	//s = append(s, fmt.Sprintf("usage: %04x", di.Usage))
+	//s = append(s, fmt.Sprintf("interface number: %d", di.InterfaceNumber))
 	return strings.Join(s, "\n")
 }
 
@@ -121,9 +144,9 @@ type Error struct {
 
 func (e *Error) Error() string {
 	if e.ErrorString != "" {
-		return fmt.Sprintf("%s failed %s (%d)", e.FunctionName, e.ErrorString, e.ReturnCode)
+		return fmt.Sprintf("%s() returned %d: %s", e.FunctionName, e.ReturnCode, e.ErrorString)
 	}
-	return fmt.Sprintf("%s failed (%d)", e.FunctionName, e.ReturnCode)
+	return fmt.Sprintf("%s() returned %d", e.FunctionName, e.ReturnCode)
 }
 
 // apiError returns a C-API error.
@@ -186,16 +209,16 @@ func Enumerate(vid, pid uint16) []*DeviceInfo {
 		mString, _ := wchar.WcharStringPtrToGoString(unsafe.Pointer(di.manufacturer_string))
 		pString, _ := wchar.WcharStringPtrToGoString(unsafe.Pointer(di.product_string))
 		dev := &DeviceInfo{
-			Path:               C.GoString(di.path),
-			Vid:                uint16(di.vendor_id),
-			Pid:                uint16(di.product_id),
-			SerialNumber:       sString,
-			ReleaseNumber:      uint16(di.release_number),
-			ManufacturerString: mString,
-			ProductString:      pString,
-			UsagePage:          uint16(di.usage_page),
-			Usage:              uint16(di.usage),
-			InterfaceNumber:    int(di.interface_number),
+			Path:            C.GoString(di.path),
+			VendorID:        uint16(di.vendor_id),
+			ProductID:       uint16(di.product_id),
+			SerialNumber:    sString,
+			ReleaseNumber:   uint16(di.release_number),
+			Manufacturer:    mString,
+			Product:         pString,
+			UsagePage:       uint16(di.usage_page),
+			Usage:           uint16(di.usage),
+			InterfaceNumber: int(di.interface_number),
 		}
 		devs = append(devs, dev)
 		di = di.next
@@ -205,31 +228,38 @@ func Enumerate(vid, pid uint16) []*DeviceInfo {
 }
 
 // Open a HID device using a vendor ID (VID), product ID (PID) and optionally a serial number.
-func Open(vid, pid uint16, sn string) *Device {
-	ws, err := wchar.FromGoString(sn)
-	if err != nil {
-		return nil
+func Open(vid, pid uint16, sn string) (*Device, error) {
+	var dev *C.struct_hid_device_
+	if sn == "" {
+		dev = C.hid_open(C.uint16_t(vid), C.uint16_t(pid), nil)
+	} else {
+		ws, err := wchar.FromGoString(sn)
+		if err != nil {
+			return nil, errors.New("can't convert serial number")
+		}
+		dev = C.hid_open(C.uint16_t(vid), C.uint16_t(pid), (*C.wchar_t)(ws.Pointer()))
 	}
-	dev := C.hid_open(C.uint16_t(vid), C.uint16_t(pid), (*C.wchar_t)(ws.Pointer()))
 	if dev == nil {
-		return nil
+		return nil, errors.New("hid_open() returned NULL")
 	}
-	return &Device{
+	d := &Device{
 		dev: dev,
 	}
+	return d, nil
 }
 
 // OpenPath opens a HID device by its path name.
-func OpenPath(path string) *Device {
+func OpenPath(path string) (*Device, error) {
 	cPath := C.CString(path)
 	defer C.free(unsafe.Pointer(cPath))
 	dev := C.hid_open_path(cPath)
 	if dev == nil {
-		return nil
+		return nil, errors.New("hid_open_path() returned NULL")
 	}
-	return &Device{
+	d := &Device{
 		dev: dev,
 	}
+	return d, nil
 }
 
 // Write an output report to a HID device.
