@@ -33,23 +33,23 @@ import (
 // utility functions
 
 // c2goCopy copies a C uint8_t buffer into a Go []byte slice.
-func c2goCopy(dst []byte, di int, src *C.uint8_t, si int) []byte {
+func c2goCopy(dst []byte, src *C.uint8_t) []byte {
 	x := (*[1 << 30]byte)(unsafe.Pointer(src))
-	copy(dst[di:], x[si:])
+	copy(dst, x[:])
 	return dst
 }
 
 // go2cCopy copies a Go []byte slice to a C uint8_t buffer.
-func go2cCopy(dst *C.uint8_t, di int, src []byte, si int) *C.uint8_t {
+func go2cCopy(dst *C.uint8_t, src []byte) *C.uint8_t {
 	x := (*[1 << 30]byte)(unsafe.Pointer(dst))
-	copy(x[di:], src[si:])
+	copy(x[:], src)
 	return dst
 }
 
 // c2goSlice creates a Go []byte slice and copies in a C uint8_t buffer.
 func c2goSlice(buf *C.uint8_t, n int) []byte {
 	s := make([]byte, n)
-	return c2goCopy(s, 0, buf, 0)
+	return c2goCopy(s, buf)
 }
 
 // allocBuffer allocates a C uint8_t buffer of length n bytes.
@@ -271,12 +271,11 @@ func OpenPath(path string) (*Device, error) {
 }
 
 // Write an output report to a HID device.
-func (d *Device) Write(id byte, data []byte) error {
-	cLength := len(data) + 1
+func (d *Device) Write(data []byte) error {
+	cLength := len(data)
 	cBuffer := allocBuffer(cLength)
 	defer freeBuffer(cBuffer)
-	go2cCopy(cBuffer, 1, data, 0)
-	cBuffer.set(0, id)
+	go2cCopy(cBuffer, data)
 	rc := int(C.hid_write(d.dev, cBuffer, C.ulong(cLength)))
 	if rc < 0 {
 		return d.devError("hid_write", rc)
@@ -329,11 +328,11 @@ func (d *Device) SetNonBlocking(nonblock bool) error {
 }
 
 // SendFeatureReport sends a feature report to the device.
-func (d *Device) SendFeatureReport(id byte, data []byte) error {
-	cLength := len(data) + 1
+func (d *Device) SendFeatureReport(data []byte) error {
+	cLength := len(data)
 	cBuffer := allocBuffer(cLength)
 	defer freeBuffer(cBuffer)
-	go2cCopy(cBuffer, 1, data, 0)
+	go2cCopy(cBuffer, data)
 	rc := int(C.hid_send_feature_report(d.dev, cBuffer, C.ulong(cLength)))
 	if rc < 0 {
 		return d.devError("hid_send_feature_report", rc)
