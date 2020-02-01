@@ -32,23 +32,24 @@ import (
 //-----------------------------------------------------------------------------
 // utility functions
 
-// go2cBuffer creates a C uint8_t buffer from a Go []byte buffer.
-// Call freeBuffer on the returned C buffer.
-func go2cBuffer(buf []byte) *C.uint8_t {
-	return (*C.uint8_t)(unsafe.Pointer(C.CString(string(buf))))
+// c2goCopy copies a C uint8_t buffer into a Go []byte slice.
+func c2goCopy(dst []byte, di int, src *C.uint8_t, si int) []byte {
+	x := (*[1 << 30]byte)(unsafe.Pointer(src))
+	copy(dst[di:], x[si:])
+	return dst
 }
 
-// c2goCopy copies a C uint8_t buffer into a Go []byte slice.
-func c2goCopy(s []byte, buf *C.uint8_t) []byte {
-	x := (*[1 << 30]byte)(unsafe.Pointer(buf))
-	copy(s, x[:])
-	return s
+// go2cCopy copies a Go []byte slice to a C uint8_t buffer.
+func go2cCopy(dst *C.uint8_t, di int, src []byte, si int) *C.uint8_t {
+	x := (*[1 << 30]byte)(unsafe.Pointer(dst))
+	copy(x[di:], src[si:])
+	return dst
 }
 
 // c2goSlice creates a Go []byte slice and copies in a C uint8_t buffer.
 func c2goSlice(buf *C.uint8_t, n int) []byte {
 	s := make([]byte, n)
-	return c2goCopy(s, buf)
+	return c2goCopy(s, 0, buf, 0)
 }
 
 // allocBuffer allocates a C uint8_t buffer of length n bytes.
@@ -63,9 +64,9 @@ func freeBuffer(buf *C.uint8_t) {
 }
 
 // Set a value within a C uint8_t buffer.
-func (buf *C.uint8_t) Set(idx int, val byte) {
+func (buf *C.uint8_t) set(i int, val byte) {
 	x := (*[1 << 30]byte)(unsafe.Pointer(buf))
-	x[idx] = val
+	x[i] = val
 }
 
 // boolToInt converts a boolean to an int.
@@ -205,7 +206,6 @@ func Enumerate(vid, pid uint16) []*DeviceInfo {
 	devs := []*DeviceInfo{}
 	di := diList
 	for di != nil {
-
 		devInfo := &DeviceInfo{
 			Path:            C.GoString(di.path),
 			VendorID:        uint16(di.vendor_id),
@@ -215,9 +215,7 @@ func Enumerate(vid, pid uint16) []*DeviceInfo {
 			Usage:           uint16(di.usage),
 			InterfaceNumber: int(di.interface_number),
 		}
-
 		var err error
-
 		devInfo.SerialNumber, err = wchar.WcharStringPtrToGoString(unsafe.Pointer(di.serial_number))
 		if err != nil {
 			devInfo.SerialNumber = ""
@@ -273,42 +271,50 @@ func OpenPath(path string) (*Device, error) {
 }
 
 // Write an output report to a HID device.
-func (d *Device) Write(data []byte) (int, error) {
-	cBuffer := go2cBuffer(data)
+func (d *Device) Write(id byte, data []byte) error {
+	cLength := len(data) + 1
+	cBuffer := allocBuffer(cLength)
 	defer freeBuffer(cBuffer)
-	rc := int(C.hid_write(d.dev, cBuffer, C.ulong(len(data))))
+	go2cCopy(cBuffer, 1, data, 0)
+	cBuffer.set(0, id)
+	rc := int(C.hid_write(d.dev, cBuffer, C.ulong(cLength)))
 	if rc < 0 {
-		return 0, d.devError("hid_write", rc)
+		return d.devError("hid_write", rc)
 	}
-	return rc, nil
+	if rc != cLength {
+		return fmt.Errorf("hid_write() only wrote %d of %d bytes", rc, cLength)
+	}
+	return nil
 }
 
 // ReadTimeout reads an input report from a HID device with timeout.
 func (d *Device) ReadTimeout(id byte, length, milliseconds int) ([]byte, error) {
-	cBuffer := allocBuffer(length)
+	cLength := length + 1
+	cBuffer := allocBuffer(cLength)
 	defer freeBuffer(cBuffer)
-	cBuffer.Set(0, id)
-	rc := int(C.hid_read_timeout(d.dev, cBuffer, C.ulong(length), C.int(milliseconds)))
+	cBuffer.set(0, id)
+	rc := int(C.hid_read_timeout(d.dev, cBuffer, C.ulong(cLength), C.int(milliseconds)))
 	if rc < 0 {
 		return nil, d.devError("hid_read_timeout", rc)
 	}
 	if rc == 0 {
-		return nil, nil
+		return nil, errors.New("hid_read_timeout() read 0 bytes")
 	}
 	return c2goSlice(cBuffer, rc), nil
 }
 
 // Read an input report from a HID device.
 func (d *Device) Read(id byte, length int) ([]byte, error) {
-	cBuffer := allocBuffer(length)
+	cLength := length + 1
+	cBuffer := allocBuffer(cLength)
 	defer freeBuffer(cBuffer)
-	cBuffer.Set(0, id)
-	rc := int(C.hid_read(d.dev, cBuffer, C.ulong(length)))
+	cBuffer.set(0, id)
+	rc := int(C.hid_read(d.dev, cBuffer, C.ulong(cLength)))
 	if rc < 0 {
 		return nil, d.devError("hid_read", rc)
 	}
 	if rc == 0 {
-		return nil, nil
+		return nil, errors.New("hid_read() read 0 bytes")
 	}
 	return c2goSlice(cBuffer, rc), nil
 }
@@ -323,27 +329,33 @@ func (d *Device) SetNonBlocking(nonblock bool) error {
 }
 
 // SendFeatureReport sends a feature report to the device.
-func (d *Device) SendFeatureReport(data []byte) (int, error) {
-	cBuffer := go2cBuffer(data)
+func (d *Device) SendFeatureReport(id byte, data []byte) error {
+	cLength := len(data) + 1
+	cBuffer := allocBuffer(cLength)
 	defer freeBuffer(cBuffer)
-	rc := int(C.hid_send_feature_report(d.dev, cBuffer, C.ulong(len(data))))
+	go2cCopy(cBuffer, 1, data, 0)
+	rc := int(C.hid_send_feature_report(d.dev, cBuffer, C.ulong(cLength)))
 	if rc < 0 {
-		return 0, d.devError("hid_send_feature_report", rc)
+		return d.devError("hid_send_feature_report", rc)
 	}
-	return rc, nil
+	if rc != cLength {
+		return fmt.Errorf("hid_send_feature_report() only wrote %d of %d bytes", rc, cLength)
+	}
+	return nil
 }
 
 // GetFeatureReport gets a feature report from a HID device.
 func (d *Device) GetFeatureReport(id byte, length int) ([]byte, error) {
-	cBuffer := allocBuffer(length + 1)
+	cLength := length + 1
+	cBuffer := allocBuffer(cLength)
 	defer freeBuffer(cBuffer)
-	cBuffer.Set(0, id)
-	rc := int(C.hid_get_feature_report(d.dev, cBuffer, C.ulong(length+1)))
+	cBuffer.set(0, id)
+	rc := int(C.hid_get_feature_report(d.dev, cBuffer, C.ulong(cLength)))
 	if rc < 0 {
 		return nil, d.devError("hid_get_feature_report", rc)
 	}
 	if rc == 0 {
-		return nil, nil
+		return nil, errors.New("hid_get_feature_report() read 0 bytes")
 	}
 	return c2goSlice(cBuffer, rc), nil
 }

@@ -56,6 +56,7 @@ func main() {
 		fmt.Printf("%s\n", err)
 		os.Exit(1)
 	}
+
 	os.Exit(0)
 }
 
