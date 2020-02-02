@@ -360,9 +360,8 @@ func (d *Device) GetFeatureReport(id byte, length int) ([]byte, error) {
 }
 
 // Close closes a HID device.
-func (d *Device) Close() error {
+func (d *Device) Close() {
 	C.hid_close(d.dev)
-	return nil
 }
 
 // GetManufacturerString returns the manufacturer string from a HID device.
