@@ -3,8 +3,8 @@
 
 Go bindings for the libhidapi library.
 
-See: https://github.com/deadsy/hidapi
-See: https://github.com/signal11/hidapi
+See: https://github.com/deadsy/hidapi (this source code)
+See: https://github.com/libusb/hidapi (the C-library)
 
 */
 //-----------------------------------------------------------------------------
