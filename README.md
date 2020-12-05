@@ -21,4 +21,5 @@ The public interface of this package is a 1-1 mapping from the C-API to a Go sty
  
 ## Status
  
-Some testing has been done, mostly using USB based CMSIS-DAP devices.
+ * Some testing has been done, mostly using USB based CMSIS-DAP devices.
+ * Version 0.10.1 of the hidapi library has been tested.
