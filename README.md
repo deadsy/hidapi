@@ -14,6 +14,8 @@ This package provides a Go wrapper for the C-library API so the library can be c
  * hidapi (https://github.com/libusb/hidapi)
  * libusb-1.0 (https://libusb.info/)
 
+E.g. "sudo apt-get install libhidapi-dev" on Debian based Linux.
+
 ## Notes
 
 All C-API functions have Go wrappers.
