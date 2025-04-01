@@ -64,7 +64,7 @@ func freeBuffer(buf *C.uint8_t) {
 }
 
 // Set a value within a C uint8_t buffer.
-func (buf *C.uint8_t) set(i int, val byte) {
+func setBuffer(buf *C.uint8_t, i int, val byte) {
 	x := (*[1 << 30]byte)(unsafe.Pointer(buf))
 	x[i] = val
 }
@@ -291,7 +291,7 @@ func (d *Device) ReadTimeout(id byte, length, milliseconds int) ([]byte, error) 
 	cLength := length + 1
 	cBuffer := allocBuffer(cLength)
 	defer freeBuffer(cBuffer)
-	cBuffer.set(0, id)
+	setBuffer(cBuffer, 0, id)
 	rc := int(C.hid_read_timeout(d.dev, cBuffer, C.ulong(cLength), C.int(milliseconds)))
 	if rc < 0 {
 		return nil, d.devError("hid_read_timeout", rc)
@@ -307,7 +307,7 @@ func (d *Device) Read(id byte, length int) ([]byte, error) {
 	cLength := length + 1
 	cBuffer := allocBuffer(cLength)
 	defer freeBuffer(cBuffer)
-	cBuffer.set(0, id)
+	setBuffer(cBuffer, 0, id)
 	rc := int(C.hid_read(d.dev, cBuffer, C.ulong(cLength)))
 	if rc < 0 {
 		return nil, d.devError("hid_read", rc)
@@ -348,7 +348,7 @@ func (d *Device) GetFeatureReport(id byte, length int) ([]byte, error) {
 	cLength := length + 1
 	cBuffer := allocBuffer(cLength)
 	defer freeBuffer(cBuffer)
-	cBuffer.set(0, id)
+	setBuffer(cBuffer, 0, id)
 	rc := int(C.hid_get_feature_report(d.dev, cBuffer, C.ulong(cLength)))
 	if rc < 0 {
 		return nil, d.devError("hid_get_feature_report", rc)
